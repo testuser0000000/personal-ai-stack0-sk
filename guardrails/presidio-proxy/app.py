@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator
 
@@ -33,7 +34,19 @@ from config import Config, Mode
 from redactor import RedactionResult, Redactor
 
 
+# Configure the proxy's logger so messages reach stderr where the operator
+# can see them. Without this, `log.info(...)` calls disappear silently when
+# running under uvicorn — uvicorn only attaches handlers to its own loggers
+# (uvicorn, uvicorn.access, uvicorn.error), not arbitrary names.
 log = logging.getLogger("presidio-proxy")
+if not log.handlers:
+    _handler = logging.StreamHandler(sys.stderr)
+    _handler.setFormatter(
+        logging.Formatter("[presidio-proxy] %(asctime)s %(levelname)s %(message)s")
+    )
+    log.addHandler(_handler)
+    log.setLevel(logging.INFO)
+    log.propagate = False  # don't also bubble to root
 
 
 # --------------------------------------------------------------------------- #
