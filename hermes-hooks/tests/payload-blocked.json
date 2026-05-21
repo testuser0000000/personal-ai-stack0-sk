@@ -1,0 +1,7 @@
+{
+  "tool_name": "read_file",
+  "args": {"path": "~/.ssh/id_rsa"},
+  "session_id": "test",
+  "task_id": "test",
+  "tool_call_id": "test"
+}
