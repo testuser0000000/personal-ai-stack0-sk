@@ -92,34 +92,24 @@ personal-ai-stack0-sk/
 > Tested on Windows 11 with WSL2 Ubuntu 24.04. A `docker-compose.yml`
 > that does all of this with one command is on the roadmap.
 
-**One-time setup** (the slow part — installs the components):
+**One-time setup** (the slow part):
 
 ```bash
-# 1. Install Ollama into user space (no sudo)
-curl -fL -o /tmp/ollama.tar.zst \
-  https://github.com/ollama/ollama/releases/latest/download/ollama-linux-amd64.tar.zst
-# (extract + place ~/.local/bin/ollama — see scripts/install/ if/when added)
+# 1. Install everything — Ollama, the proxy venv + spaCy model, OpenWebUI,
+#    and (if Hermes is around) the file-access ACL hook. Idempotent.
+./scripts/install/all.sh
 
-# 2. Pull a local model
+# 2. Pull a local model (your choice; ~5 GB each)
 ollama pull hermes3:8b
 
-# 3. Install OpenWebUI (uv-managed isolated venv)
-uv tool install open-webui
-
-# 4. Set up the Presidio proxy venv (one-time)
-cd guardrails/presidio-proxy
-uv venv .venv --python 3.11
-uv pip install -r requirements.txt
-.venv/bin/python -m spacy download en_core_web_sm
-cd ../..
-
-# 5. Configure secrets
+# 3. Configure secrets — copy the template, fill in your own values
 cp .env.example .env
 $EDITOR .env       # at minimum, set OPENROUTER_API_KEY
-
-# 6. Install the Hermes file-access ACL hook (if you use Hermes Agent)
-./hermes-hooks/install.sh
 ```
+
+See [`scripts/install/README.md`](scripts/install/README.md) for what each
+script does individually, and which steps are deliberately left manual
+(`.env` editing, model pulls) so you don't get surprised.
 
 **Day-to-day** (after setup is done):
 
