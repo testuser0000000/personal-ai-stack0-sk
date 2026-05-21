@@ -1,14 +1,17 @@
 # personal-ai-stack0-sk
 
+[![CI](https://github.com/testuser0000000/personal-ai-stack0-sk/actions/workflows/ci.yml/badge.svg)](https://github.com/testuser0000000/personal-ai-stack0-sk/actions/workflows/ci.yml)
+
 A self-hosted, privacy-conscious AI workspace for personal use and learning.
 Local LLMs (Ollama) and cloud LLMs (OpenRouter) live behind one chat UI
 (OpenWebUI), with a PII-redaction proxy and file-access controls protecting
 anything sensitive on the host machine.
 
-> **Status:** Early development. The runtime stack (OpenWebUI + Ollama) is
-> working on my machine; the privacy guardrails and Gmail archiving features
-> are in progress. This repo is also a portfolio piece — built in the open
-> while I learn.
+> **Status:** Working end-to-end. All three privacy layers (local-model
+> fallback, outbound PII redaction, file-read deny list) are in place and
+> verified. Roadmap: one-command `docker-compose.yml`, Gmail thread export,
+> OpenWebUI Workspaces walkthrough. This repo is also a portfolio piece —
+> built in the open while I learn.
 
 ## Why this exists
 
@@ -86,34 +89,48 @@ personal-ai-stack0-sk/
 
 ## Quickstart (Windows + WSL2)
 
-> Tested on Windows 11 with WSL2 Ubuntu 24.04.
+> Tested on Windows 11 with WSL2 Ubuntu 24.04. A `docker-compose.yml`
+> that does all of this with one command is on the roadmap.
+
+**One-time setup** (the slow part — installs the components):
 
 ```bash
-# 1. Install Ollama (user-space, no sudo)
-#    See scripts/ for the install script used.
+# 1. Install Ollama into user space (no sudo)
+curl -fL -o /tmp/ollama.tar.zst \
+  https://github.com/ollama/ollama/releases/latest/download/ollama-linux-amd64.tar.zst
+# (extract + place ~/.local/bin/ollama — see scripts/install/ if/when added)
 
-# 2. Pull a model
+# 2. Pull a local model
 ollama pull hermes3:8b
 
-# 3. Install OpenWebUI (via uv tool, also user-space)
+# 3. Install OpenWebUI (uv-managed isolated venv)
 uv tool install open-webui
 
-# 4. Copy env template, fill in your keys
+# 4. Set up the Presidio proxy venv (one-time)
+cd guardrails/presidio-proxy
+uv venv .venv --python 3.11
+uv pip install -r requirements.txt
+.venv/bin/python -m spacy download en_core_web_sm
+cd ../..
+
+# 5. Configure secrets
 cp .env.example .env
-# Edit .env: add your OPENROUTER_API_KEY, etc.
+$EDITOR .env       # at minimum, set OPENROUTER_API_KEY
 
-# 5. (Once built) Start the Presidio proxy
-cd guardrails/presidio-proxy && uvicorn app:app --port 8000 &
-
-# 6. Start OpenWebUI pointed at the proxy
-OPENAI_API_BASE_URL=http://localhost:8000/v1 open-webui serve --port 3000
-
-# 7. Open http://localhost:3000, sign up (first user = admin),
-#    disable signup in admin settings.
+# 6. Install the Hermes file-access ACL hook (if you use Hermes Agent)
+./hermes-hooks/install.sh
 ```
 
-A `docker-compose.yml` that orchestrates all of the above with one command
-is on the roadmap once the Presidio proxy is stable.
+**Day-to-day** (after setup is done):
+
+```bash
+./scripts/bringup.sh        # start Ollama + proxy + OpenWebUI
+# ... open http://localhost:3000 ...
+./scripts/teardown.sh       # stop everything
+```
+
+See [`scripts/README.md`](scripts/README.md) for the per-component start
+scripts and what `bringup` actually does.
 
 ## Security & secrets
 

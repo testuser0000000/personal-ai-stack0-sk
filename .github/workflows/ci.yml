@@ -1,0 +1,62 @@
+name: CI
+
+# Run on every push to main and every pull request targeting main.
+# Two parallel jobs because the proxy tests need a heavy install
+# (presidio + spaCy model, ~3 min) while the hooks tests run in seconds.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ────────────────────────────────────────────────────────────────────────
+  # Fast — pytest on the file-access deny-list hook (stdlib only)
+  # ────────────────────────────────────────────────────────────────────────
+  hermes-hooks:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: hermes-hooks
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install pytest
+        run: pip install --quiet pytest
+
+      - name: Run hook unit + subprocess tests
+        run: pytest tests/ -v --tb=short
+
+  # ────────────────────────────────────────────────────────────────────────
+  # Slow — pytest on the Presidio PII-redaction proxy
+  # ────────────────────────────────────────────────────────────────────────
+  presidio-proxy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: guardrails/presidio-proxy
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          # Speeds up subsequent runs by caching pip wheels keyed on
+          # requirements.txt — only re-downloads if pins change.
+          cache: pip
+          cache-dependency-path: guardrails/presidio-proxy/requirements.txt
+
+      - name: Install proxy dependencies
+        run: pip install -r requirements.txt
+
+      - name: Download spaCy small English model
+        run: python -m spacy download en_core_web_sm
+
+      - name: Run proxy unit + integration tests
+        run: pytest -v --tb=short
