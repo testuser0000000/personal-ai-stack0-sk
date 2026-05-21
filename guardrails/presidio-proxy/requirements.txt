@@ -1,0 +1,29 @@
+# Presidio PII-redaction proxy — pinned dependencies.
+# Pinning is deliberate: this is a security-adjacent component and we want
+# reproducible behavior across machines. Bump versions intentionally, with
+# tests passing after each bump.
+
+# --- Web server ---
+fastapi==0.136.1
+uvicorn[standard]==0.47.0
+httpx==0.28.1
+
+# --- PII detection / redaction ---
+presidio-analyzer==2.2.362
+presidio-anonymizer==2.2.362
+# spaCy small English model — Presidio's NER backend. The 'lg' model is
+# more accurate at named-entity detection but is ~750MB; 'sm' is ~50MB
+# and sufficient since most of our PII types are regex-based recognizers,
+# not NER.
+spacy==3.8.14
+# Note: the spaCy model itself is downloaded via:
+#   python -m spacy download en_core_web_sm
+# See README for setup steps.
+
+# --- Logging ---
+python-json-logger==4.1.0
+
+# --- Tests ---
+pytest==9.0.3
+pytest-asyncio==1.3.0
+respx==0.23.1            # httpx mock transport for upstream testing
