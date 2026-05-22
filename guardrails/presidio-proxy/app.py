@@ -5,12 +5,13 @@ Design notes
 ------------
 - **One responsibility.** This module wires HTTP — request parsing, mode
   dispatch, upstream forwarding, response streaming. The actual detection
-  and redaction lives in redactor.py.
+  and redaction lives in redactor.py; response-side scanning lives in
+  response_scanner.py.
 - **Streaming pass-through.** When the client requests `"stream": true`,
-  we stream the upstream response back chunk-by-chunk. We do NOT buffer
-  the full response, because that would break the typing-indicator UX
-  that users care about. Outbound redaction is sufficient for v1; we
-  leave response-side redaction for later.
+  we stream the upstream response back chunk-by-chunk. We never buffer
+  the full response, because that would break the typing-indicator UX.
+  Response-side PII scanning (v0.2+) operates on a small per-choice tail
+  buffer instead — see response_scanner.py.
 - **Stateless.** No DB, no session state. Every request is independent.
 - **Auth model.** The proxy holds the real upstream API key in env. The
   client (OpenWebUI) talks to the proxy with no credential, or any
@@ -21,17 +22,17 @@ Design notes
 from __future__ import annotations
 
 import logging
-import os
 import sys
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator
 
 import httpx
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from config import Config, Mode
+from config import Config, Mode, ResponseMode
 from redactor import RedactionResult, Redactor
+from response_scanner import StreamingResponseScanner, redact_json_response
 
 
 # Configure the proxy's logger so messages reach stderr where the operator
@@ -50,7 +51,7 @@ if not log.handlers:
 
 
 # --------------------------------------------------------------------------- #
-# Redaction over a chat-completions payload
+# Redaction over a chat-completions payload (request side)
 # --------------------------------------------------------------------------- #
 
 def _redact_messages(
@@ -104,7 +105,7 @@ def create_app(config: Config | None = None) -> FastAPI:
 
     app = FastAPI(
         title="Presidio PII Proxy",
-        version="0.1.0",
+        version="0.2.0",
         lifespan=lifespan,
         docs_url="/__docs",  # not /docs — keep that namespace free for the upstream
     )
@@ -114,6 +115,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         return {
             "status": "ok",
             "mode": cfg.mode.value,
+            "response_mode": cfg.response_mode.value,
             "upstream": cfg.upstream_url,
             "entities": list(cfg.entities),
         }
@@ -192,24 +194,58 @@ def create_app(config: Config | None = None) -> FastAPI:
         )
 
         is_streaming = bool(body_json and body_json.get("stream"))
+        # Response-side scanning applies only to completion endpoints — we
+        # don't scan /v1/models, embeddings probes, etc.
+        scan_response = is_completion and cfg.response_mode is not ResponseMode.OFF
 
         if is_streaming:
             # Send the request, stream chunks back as they arrive.
             upstream_resp = await request.app.state.http.send(upstream_req, stream=True)
+            if scan_response:
+                scanner = StreamingResponseScanner(
+                    redactor, warn_only=(cfg.response_mode is ResponseMode.WARN)
+                )
+                body_iter = scanner.filter(_stream_with_cleanup(upstream_resp))
+            else:
+                body_iter = _stream_with_cleanup(upstream_resp)
             return StreamingResponse(
-                _stream_with_cleanup(upstream_resp),
+                body_iter,
                 status_code=upstream_resp.status_code,
                 headers=_filter_response_headers(upstream_resp.headers),
                 media_type=upstream_resp.headers.get("content-type", "text/event-stream"),
             )
 
-        # Non-streaming: read fully, return.
+        # Non-streaming: read fully, optionally scan, return.
         upstream_resp = await request.app.state.http.send(upstream_req)
+        resp_content = upstream_resp.content
+        resp_headers = _filter_response_headers(upstream_resp.headers)
+        resp_media_type = upstream_resp.headers.get("content-type")
+
+        if scan_response and upstream_resp.status_code == 200:
+            try:
+                resp_json = upstream_resp.json()
+            except Exception:
+                resp_json = None
+            if isinstance(resp_json, dict):
+                resp_json, resp_findings = redact_json_response(resp_json, redactor)
+                if any(r.had_findings for r in resp_findings):
+                    log.info(
+                        "response-redaction-event mode=%s findings=%s",
+                        cfg.response_mode.value,
+                        [
+                            redactor.describe_findings(r.findings)
+                            for r in resp_findings if r.had_findings
+                        ],
+                    )
+                    if cfg.response_mode is ResponseMode.REDACT:
+                        resp_content = httpx.Response(200, json=resp_json).content
+                        resp_media_type = "application/json"
+
         return Response(
-            content=upstream_resp.content,
+            content=resp_content,
             status_code=upstream_resp.status_code,
-            headers=_filter_response_headers(upstream_resp.headers),
-            media_type=upstream_resp.headers.get("content-type"),
+            headers=resp_headers,
+            media_type=resp_media_type,
         )
 
     return app

@@ -36,13 +36,37 @@ Things explicitly **not** in the default list (configurable via env):
   unless you're using this for healthcare or HR use cases. Enable via
   `PRESIDIO_ENTITIES` if you need them.
 
-## Modes (env: `PRESIDIO_MODE`)
+## Request-side modes (env: `PRESIDIO_MODE`)
+
+What the proxy does with PII in the **outbound prompt** before it leaves
+the machine.
 
 | Mode | Behavior |
 |---|---|
 | `REDACT` *(default)* | Replace each match with `[ENTITY_TYPE]` (e.g. `[EMAIL_ADDRESS]`) and forward the cleaned request. |
 | `WARN` | Log finding metadata (type + position, never the original text) and forward the **original** request unchanged. Useful during a tuning phase to see what would be redacted without breaking anything. |
 | `BLOCK` | Refuse the request with HTTP 400 + a JSON explanation of what was caught. Use when "if in doubt, don't send" is more important than UX. |
+
+## Response-side modes (env: `PRESIDIO_RESPONSE_MODE`, v0.2+)
+
+What the proxy does with PII in the **inbound completion**. Closes the
+leak path where a vision model reads PII off an uploaded receipt or
+screenshot and echoes it back into the conversation. Works for both
+non-streaming responses and `stream: true` SSE responses; streaming uses
+an 80-char per-choice tail buffer so PII tokens that arrive across
+multiple chunks are still caught.
+
+| Mode | Behavior |
+|---|---|
+| `REDACT` *(default)* | Replace matches in `choices[*].message.content` (or streaming `delta.content`) with `[ENTITY_TYPE]` before sending to the client. |
+| `WARN` | Log finding metadata; pass the original response through unchanged. |
+| `OFF` | Skip response scanning entirely. Mirrors v0.1 behavior, marginally faster. |
+
+`BLOCK` is intentionally not a response-side option: by the time the
+proxy sees response bytes the upstream call is already paid for, and for
+streaming responses earlier tokens may already be on the wire. If you
+need "refuse on PII," use request-side `BLOCK` on the prompt that
+*would* surface it.
 
 ## Setup
 
@@ -118,11 +142,16 @@ the client's Authorization header and substitutes its own from
   If you ever bind to `0.0.0.0`, you've now made a credential-laundering
   service for anyone on your LAN — don't.
 
-## What's not done yet (v0.1)
+## What's not done yet (v0.2)
 
-- Response-side scanning. If the upstream returns text containing PII
-  (unlikely from chat completions, but possible), this proxy passes it
-  through unchanged.
 - Allowlist support for "I know this looks like PII but please send it
   anyway" — e.g., when intentionally asking the LLM to format an email.
 - Per-conversation overrides. Currently the mode is global.
+- Tail-buffer redaction in streaming responses bounds detection to PII
+  tokens shorter than ~80 characters. Every entity type currently in the
+  default set (emails, phones, credit cards, IPs, the listed API-key
+  formats) fits comfortably inside that window — but a deliberately
+  constructed longer secret could be split across the buffer boundary.
+  Mitigation: keep custom entity patterns short, or raise `TAIL_KEEP` in
+  `response_scanner.py` at the cost of more latency before the first
+  visible token.
